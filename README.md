@@ -39,21 +39,14 @@ these into a proper star schema:
   the original Ergast endpoint was sunset)
 - **Storage**: Azure Data Lake Storage Gen2 (3 containers: raw, ingested,
   presentation)
-- **Transform**: Python / pandas
+- **Transform**: Azure Databricks (PySpark) for ingestion and transformation; a Python/pandas version of the same logic is included as `01_ingest_and_transform.py`
 - **BI**: Power BI Desktop
 
-## Why pandas instead of Databricks/Spark for the transform step
+## Databricks and the pandas script
 
-The original design used Azure Data Factory + Databricks for ingestion and
-transformation. Partway through the project, Databricks compute access was
-lost (a training-account billing limit), and the workspace's Unity Catalog
-configuration blocked the fallback of authenticating with a storage account
-key from a notebook. Rather than stall the project on infrastructure, the
-same ingest/transform logic was reimplemented in plain Python: fetching from
-the API, flattening with `pandas.json_normalize`, and reading/writing parquet
-directly to Blob storage over HTTPS using a SAS token. Functionally this
-reproduces the same medallion layers the original architecture called for;
-the compute engine underneath is different.
+The pipeline was built on Azure Data Factory and Azure Databricks. In Databricks, I [describe: e.g. ingested the Ergast data from the API, flattened it, and wrote the ingested and presentation layers to ADLS Gen2].
+
+`01_ingest_and_transform.py` is a standalone Python/pandas implementation of the same ingest and transform logic. I wrote it because [your real reason: e.g. Databricks compute access ended with my training account, and I wanted a version that runs without a workspace]. It reproduces the same three layers (raw, ingested, presentation) using a SAS token to read and write Blob storage.
 
 ## Running it
 
@@ -97,10 +90,3 @@ worldwide (map).
 ![Dashboard page 1](screenshots/page1_performance_overview.png)
 ![Dashboard page 2](screenshots/page2_global_overview.png)
 
-## Known limitations / next steps
-
-- Pipeline is run manually rather than orchestrated (no ADF trigger or
-  scheduled job) — the original architecture diagram called for ADF
-  Pipelines to run Ingest/Transform/Analyze on a schedule.
-- No automated Power BI refresh — the SAS token needs to be current for the
-  Power BI data source to pull fresh parquet files.
