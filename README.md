@@ -1,92 +1,65 @@
-# F1 Data Pipeline and Power BI Dashboard
+F1 Racing Data Engineering Pipeline on Azure
 
-An end-to-end data engineering project that pulls the full history of
-Formula 1 (1950-present) from a public API, runs it through a
-medallion-architecture pipeline on Azure Data Lake Storage, and serves a
-two-page Power BI dashboard.
+An end-to-end data engineering project that ingests Formula 1 data from the Ergast API into Azure Data Lake Storage Gen2 using Azure Data Factory, with Azure Databricks planned for transformation and Power BI for reporting.
 
-## Architecture
+Architecture
 
-```
-Ergast API
-   |
-   v
-Raw layer          (raw-data)          -- untouched JSON, as returned by the API
-   |
-   v
-Ingested layer      (ingested-data)     -- flattened, typed, parquet
-   |
-   v
-Presentation layer  (presentation-data) -- star schema: fact + dimension tables
-   |
-   v
-Power BI            -- data model, relationships, two-page report
-```
+Architecture
 
-Five source entities are pulled from the API: `races`, `drivers`,
-`constructors`, `circuits`, and `results`. The Presentation layer reshapes
-these into a proper star schema:
+Flow: Ergast API → ADF Pipelines → ADLS Gen2 (Raw) → Databricks (Transform) → ADLS Gen2 (Presentation) → Analyze → Power BI
 
-- `fact_race_results` -- one row per driver per race per entry
-- `dim_driver`
-- `dim_constructor`
-- `dim_race` (includes circuit name and lat/long, for the map visual)
-
-## Stack
-
-- **Source**: [Ergast API](http://ergast.com/mrd/) (via the
-  [Jolpica](https://github.com/jolpica/jolpica-f1) community mirror, since
-  the original Ergast endpoint was sunset)
-- **Storage**: Azure Data Lake Storage Gen2 (3 containers: raw, ingested,
-  presentation)
-- **Transform**: Azure Databricks (PySpark) for ingestion and transformation; a Python/pandas version of the same logic is included as `01_ingest_and_transform.py`
-- **BI**: Power BI Desktop
-
-## Databricks and the pandas script
-
-The pipeline was built on Azure Data Factory and Azure Databricks. In Databricks, I [describe: e.g. ingested the Ergast data from the API, flattened it, and wrote the ingested and presentation layers to ADLS Gen2].
-
-`01_ingest_and_transform.py` is a standalone Python/pandas implementation of the same ingest and transform logic. I wrote it because [your real reason: e.g. Databricks compute access ended with my training account, and I wanted a version that runs without a workspace]. It reproduces the same three layers (raw, ingested, presentation) using a SAS token to read and write Blob storage.
-
-## Running it
-
-1. Generate a SAS token for your storage account (Azure Portal -> Storage
-   Account -> Shared access signature) with Read/Write/List/Create
-   permissions on the Container and Object resource types.
-2. Set it as an environment variable — never hardcode it:
-   ```
-   export F1_SAS_TOKEN="sv=...&sig=..."
-   ```
-3. Update `STORAGE_ACCOUNT` in `01_ingest_and_transform.py` to your own
-   storage account name.
-4. Run:
-   ```
-   python 01_ingest_and_transform.py
-   ```
-
-Fetching the full results history (1950-2026, ~55 seasons) takes several
-minutes due to API pagination and rate limiting.
-
-## Data quirks handled along the way
-
-- **Relief drivers**: a handful of 1950s-60s races (particularly at the
-  Indianapolis 500, which counted toward the championship at the time) have
-  the same driver appearing twice in one race's results, having taken over a
-  teammate's car mid-race. Handled with an `entry_seq` column rather than
-  deduplicating the rows away.
-- **API rate limiting**: fetching results season-by-season (rather than one
-  long paginated loop) with retry/backoff was needed to reliably pull the
-  full 1950-2026 history without silently losing seasons to `429` responses.
-
-## Dashboard
-
-**Page 1 — Performance overview**: season-by-season driver points (bar
-chart), points progression by round (line chart), season slicer.
-
-**Page 2 — Global overview**: KPI cards (driver / constructor / circuit /
-race counts), drivers by nationality (pie chart), circuit locations
-worldwide (map).
-
-![Dashboard page 1](screenshots/page1_performance_overview.png)
-![Dashboard page 2](screenshots/page2_global_overview.png)
+Tech Stack
+Layer	Technology
+Orchestration	Azure Data Factory
+Storage	Azure Data Lake Storage Gen2
+Transformation	Azure Databricks (PySpark, Delta)
+Governance and access	Unity Catalog, Access Connector, Azure RBAC
+Reporting	Power BI
+Source	Ergast F1 API (community mirror: api.jolpi.ca)
+Azure Resources
+Resource group: f1-dataeng-rg
+Storage account: f1dataengstorage01 with containers for the raw, ingested and presentation layers
+Data Factory: adf-f1dataeng001
+Databricks workspace: db-f1dataeng001
+What I Built
+1. Ingest (completed)
+Created ADF linked services for the HTTP source (Ergast API) and ADLS Gen2 sink.
+Built source and sink datasets for five entities: circuits, constructors, drivers, races, results.
+Built an ingestion pipeline with Copy Data activities that land JSON files in the raw layer, one folder per entity (raw-data/<entity>/<entity>.json).
+2. Secure access (completed)
+Assigned storage RBAC roles to the Databricks Access Connector.
+Created a Unity Catalog storage credential and external location pointing at the raw container, and validated read, write, list and delete permissions.
+3. Transform (in progress)
+Read raw nested JSON in Databricks via abfss:// paths.
+Planned: flatten the Ergast MRData structure with PySpark and write clean Delta tables to the ingested layer.
+4. Analyze and Report (planned)
+Aggregate tables such as driver standings, constructor performance and race summaries.
+Power BI dashboard on top of the presentation layer.
+Repository Structure
+.
+├── README.md
+├── images/              # architecture diagram and portal screenshots
+├── adf/
+│   ├── pipeline/        # exported pipeline JSON
+│   ├── dataset/         # exported dataset JSON
+│   └── linkedService/   # exported linked service JSON (no secrets)
+└── databricks/
+    └── notebooks/       # exported notebooks (.py)
+How to Reproduce
+Create a resource group, storage account (hierarchical namespace enabled), Data Factory and Databricks workspace.
+Create containers for the raw, ingested and presentation layers.
+In ADF, create linked services for HTTP (https://api.jolpi.ca/ergast/f1/) and ADLS Gen2, then the source and sink datasets and a Copy Data pipeline.
+Grant the Databricks Access Connector the Storage Blob Data Contributor (or Owner) role on the storage account.
+In Databricks, create a storage credential and external locations, then read the raw JSON from a notebook.
+Challenges and Lessons Learned
+Ergast API retirement: the original endpoint is being phased out, so the pipeline targets the community-maintained mirror.
+Schema import errors on sink datasets: these appear before the first run because the file does not exist yet; running the pipeline creates it.
+Unity Catalog vs account keys: a leftover fs.azure.account.key Spark setting conflicts with Unity Catalog authentication, so use one auth method per notebook.
+Cost control: Azure free credits ran out, which taught me to use auto-terminating, small clusters and to export pipeline and notebook code early so work is not lost.
+Future Improvements
+Parameterize datasets and use a ForEach loop instead of one Copy activity per entity.
+Incremental loads by season and round.
+Store secrets in Azure Key Vault.
+Finish the Databricks transform and Power BI report stages.
+Author
 
